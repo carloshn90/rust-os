@@ -1,0 +1,17 @@
+# Rust/Cargo
+/target/
+**/*.rs.bk
+
+# Rustfmt backup (older tooling occasionally)
+/**/*.rs.bk
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Optional: direnv
+.envrc
+.direnv/

@@ -1,0 +1,15 @@
+[target.aarch64-unknown-none]
+rustflags = [
+    "-C", "link-arg=-Tcrates/arch_aarch64_virt/linker.ld"
+]
+runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -kernel"
+
+[build]
+target = "aarch64-unknown-none"
+
+[env]
+DEFMT_LOG = "debug"
+
+[alias]
+qemu = "run -p arch_aarch64_virt --release --target aarch64-unknown-none"
+
