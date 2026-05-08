@@ -1,24 +1,12 @@
 use core::mem::MaybeUninit;
 
-use hal::{klog, log::Logger};
+use hal::klog;
 
+use crate::{
+    process::{Process, ProcessState},
+    uart_logger::logger,
+};
 const MAX_NUMBER_OF_TASKS: usize = 10;
-
-pub trait RunnableProcess {
-    fn run(&self, logger: &dyn Logger);
-}
-
-#[derive(PartialEq, Eq)]
-pub enum States {
-    RUNNABLE,
-    RUNNING,
-}
-
-pub struct Process {
-    pub process: &'static dyn RunnableProcess,
-    pub pid: u8,
-    pub state: States,
-}
 
 pub struct Scheduler {
     processes: [MaybeUninit<Process>; MAX_NUMBER_OF_TASKS],
@@ -40,17 +28,17 @@ impl Scheduler {
         self.len += 1;
     }
 
-    pub fn scheduler(&mut self, logger: &dyn Logger) -> ! {
-        logger.log("rustOS: Starting scheduler\n");
+    pub fn scheduler(&mut self) -> ! {
+        logger().log("rustOS: Starting scheduler\n");
         let mut found;
         loop {
             found = 0;
             for slot in &mut self.processes[..self.len] {
                 let p = unsafe { slot.assume_init_mut() };
-                if p.state == States::RUNNABLE {
-                    klog!(logger, "rustOS: running process pid={}\n", p.pid);
-                    p.process.run(logger);
-                    p.state = States::RUNNING;
+                if p.state == ProcessState::RUNNABLE {
+                    klog!(logger(), "rustOS: running process pid={}\n", p.pid);
+                    p.process.unwrap().run();
+                    p.state = ProcessState::RUNNING;
                     found = 1
                 }
             }

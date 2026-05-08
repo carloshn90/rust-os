@@ -27,3 +27,53 @@ macro_rules! klog {
         $logger.log_fmt(core::format_args!($($arg)*));
     }};
 }
+
+pub struct GroupedBin {
+    value: usize,
+    width: usize,
+    group: usize,
+}
+
+impl GroupedBin {
+    pub const fn new(value: usize, width: usize) -> Self {
+        Self {
+            value,
+            width,
+            group: 4,
+        }
+    }
+
+    pub const fn with_group(value: usize, width: usize, group: usize) -> Self {
+        Self {
+            value,
+            width,
+            group,
+        }
+    }
+}
+
+impl fmt::Display for GroupedBin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.width == 0 || self.group == 0 {
+            return Ok(());
+        }
+
+        for i in (0..self.width).rev() {
+            if i != self.width - 1 && (i + 1) % self.group == 0 {
+                f.write_str("_")?;
+            }
+
+            let bit = (self.value >> i) & 1;
+            let ch = if bit == 1 { '1' } else { '0' };
+            f.write_str(if ch == '1' { "1" } else { "0" })?;
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Binary for GroupedBin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}

@@ -3,8 +3,13 @@ name = "kernel"
 version = "0.1.0"
 edition = "2024"
 
-[lib]
-crate-type = ["rlib"]
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
 
 [dependencies]
 hal = { path = "../hal"}
+
+[profile.dev]
+debug = 2
+opt-level = 0

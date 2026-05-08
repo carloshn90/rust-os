@@ -14,6 +14,7 @@ SECTIONS
 
   .text : ALIGN(16) {
     *(.text .text.*)
+    PROVIDE(etext = .);
   }
 
   .rodata : ALIGN(16) {
@@ -37,4 +38,6 @@ SECTIONS
     . = . + 0x10000; /* 64 KiB stack */
     __stack_top = .;
   }
+
+  PROVIDE(kernel_end = .);
 }

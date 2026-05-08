@@ -1,16 +1,23 @@
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use hal::log::Logger;
+
 // QEMU `virt` PL011 UART base.
-const UART0_BASE: usize = 0x0900_0000;
+pub const UART0_BASE: u64 = 0x0900_0000;
 
 pub struct UartLogger;
 
+static UART_LOGGER: UartLogger = UartLogger;
+static LOGGING_INITIALISED: AtomicBool = AtomicBool::new(false);
+
 impl UartLogger {
     #[inline(always)]
-    fn mmio_write(offset: usize, val: u32) {
+    fn mmio_write(offset: u64, val: u32) {
         unsafe { core::ptr::write_volatile((UART0_BASE + offset) as *mut u32, val) }
     }
 
     #[inline(always)]
-    fn mmio_read(offset: usize) -> u32 {
+    fn mmio_read(offset: u64) -> u32 {
         unsafe { core::ptr::read_volatile((UART0_BASE + offset) as *const u32) }
     }
 
@@ -32,6 +39,18 @@ impl UartLogger {
 
 impl hal::log::Logger for UartLogger {
     fn log(&self, s: &str) {
-        UartLogger::puts(s);
+        if LOGGING_INITIALISED.load(Ordering::Relaxed) {
+            UartLogger::puts(s);
+        } else {
+            panic!("Error loging");
+        }
     }
+}
+
+pub fn init_logging() {
+    LOGGING_INITIALISED.store(true, Ordering::Relaxed);
+}
+
+pub fn logger() -> &'static dyn Logger {
+    &UART_LOGGER
 }

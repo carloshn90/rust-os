@@ -3,14 +3,6 @@
 version = 4
 
 [[package]]
-name = "arch_aarch64_virt"
-version = "0.1.0"
-dependencies = [
- "hal",
- "kernel",
-]
-
-[[package]]
 name = "hal"
 version = "0.1.0"
 

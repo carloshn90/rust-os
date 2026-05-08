@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = [
-  "crates/arch_aarch64_virt"
-, "crates/kernel"]
+members = ["crates/kernel"]
 
 [dependencies]
 
-
+[profile.dev]
+debug = 2
+opt-level = 0
