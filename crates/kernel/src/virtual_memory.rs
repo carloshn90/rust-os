@@ -7,6 +7,7 @@ use hal::klog;
 
 use crate::{
     memory::{PAGE_SIZE, RAM_END, k_alloc, pg_round_up},
+    process::NUMBER_OF_PROCESS,
     uart_logger::{UART0_BASE, logger},
 };
 
@@ -145,6 +146,9 @@ pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
         AF | UXN | ATTRIDX0 | AP_EL1_RO_EL0_NONE,
     )?;
 
+    // Allocate and map a kernel stack for each process.
+    proc_map_stacks(page_table)?;
+
     KERNEL_PAGE_TABLE.store(page_table, Ordering::SeqCst);
     Ok(page_table)
 }
@@ -209,7 +213,33 @@ fn map_pages(
     Ok(())
 }
 
-pub fn walk(mut page_table: *mut PageTable, va: u64) -> Option<*mut Pte> {
+#[inline]
+fn k_stack(p: usize) -> u64 {
+    TRAMPOLINE - ((p + 1) as u64) * 2 * (PAGE_SIZE as u64)
+}
+
+fn proc_map_stacks(page_table: *mut PageTable) -> Result<(), MapError> {
+    for i in 0..NUMBER_OF_PROCESS {
+        let pa = k_alloc();
+
+        if pa.is_null() {
+            panic!("kalloc");
+        }
+
+        let va = k_stack(i);
+        map_pages(
+            page_table,
+            va,
+            pa as u64,
+            PAGE_SIZE as u64,
+            AF | PXN | UXN | ATTRIDX0 | AP_EL1_RW_EL0_NONE,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn walk(mut page_table: *mut PageTable, va: u64) -> Option<*mut Pte> {
     if va >= MAX_VA {
         panic!("walk");
     }

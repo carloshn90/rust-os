@@ -17,7 +17,7 @@ core::arch::global_asm!(include_str!("trampoline.S"));
 
 use crate::{
     memory::k_me_init,
-    process::{PageTableRoot, Process, ProcessManager, ProcessState, RunnableProcess},
+    process::{Process, ProcessManager, ProcessState, RunnableProcess},
     scheduler::Scheduler,
     uart_logger::{UartLogger, init_logging, logger},
     virtual_memory::{k_vm_init, k_vm_init_hart},
@@ -80,7 +80,6 @@ pub fn k_main() -> ! {
         process: Some(&AProcess),
         pid: p.alloc_pid(),
         state: ProcessState::RUNNABLE,
-        user_pt: PageTableRoot { l0_phys: l0 },
     };
     let mut sch = Scheduler::init(p_a);
 
@@ -88,7 +87,6 @@ pub fn k_main() -> ! {
         process: Some(&BProcess),
         pid: p.alloc_pid(),
         state: ProcessState::RUNNABLE,
-        user_pt: PageTableRoot { l0_phys: l0 },
     };
 
     sch.add(p_b);

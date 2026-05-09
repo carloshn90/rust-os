@@ -1,23 +1,29 @@
-pub trait RunnableProcess {
-    fn run(&self);
-}
-
-#[derive(PartialEq, Eq)]
-pub enum ProcessState {
-    RUNNABLE,
-    RUNNING,
-}
+pub const NUMBER_OF_PROCESS: usize = 10;
 
 #[derive(Copy, Clone)]
-pub struct PageTableRoot {
-    pub l0_phys: u64,
-}
-
 pub struct Process {
     pub process: Option<&'static dyn RunnableProcess>,
     pub pid: u8,
     pub state: ProcessState,
-    pub user_pt: PageTableRoot,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ProcessState {
+    RUNNABLE,
+    RUNNING,
+    UNUSED,
+}
+
+const EMPTY_PROCESS: Process = Process {
+    process: None,
+    pid: 0,
+    state: ProcessState::UNUSED,
+};
+
+pub static mut PROC: [Process; NUMBER_OF_PROCESS] = [EMPTY_PROCESS; NUMBER_OF_PROCESS];
+
+pub trait RunnableProcess {
+    fn run(&self);
 }
 
 pub struct ProcessManager {
@@ -41,7 +47,6 @@ impl ProcessManager {
             process: None,
             pid: self.alloc_pid(),
             state: ProcessState::RUNNABLE,
-            user_pt: PageTableRoot { l0_phys: 0 },
         }
     }
 }
