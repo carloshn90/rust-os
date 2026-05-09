@@ -13,6 +13,7 @@ use hal::{klog, log::Logger};
 
 core::arch::global_asm!(include_str!("boot.S"));
 core::arch::global_asm!(include_str!("mmu.S"));
+core::arch::global_asm!(include_str!("trampoline.S"));
 
 use crate::{
     memory::k_me_init,

@@ -6,9 +6,9 @@ rustflags = [
 ]
 
 # run
-# runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -kernel"
+runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -kernel"
 # debug
-runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -S -s -kernel"
+# runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -S -s -kernel"
 
 [build]
 target = "aarch64-unknown-none"

@@ -21,6 +21,7 @@ const DESC_VALID: u64 = 1 << 0;
 const DESC_TABLE: u64 = 1 << 1;
 const DESC_PAGE: u64 = 1 << 1;
 const AF: u64 = 1 << 10;
+const ATTRIDX0: u64 = 0 << 2;
 const ATTRIDX1: u64 = 1 << 2;
 
 const AP_EL1_RW_EL0_NONE: u64 = 0b00 << 6;
@@ -34,12 +35,21 @@ const PXN: u64 = 1 << 53;
 const UXN: u64 = 1 << 54;
 
 const KERNBASE: u64 = 0x40080000;
+const TRAMPOLINE: u64 = MAX_VA - PAGE_SIZE as u64;
+const GICD_BASE: u64 = 0x0800_0000;
+const GICC_BASE: u64 = 0x0801_0000;
+const GICD_SIZE: u64 = 0x10000;
+const GICC_SIZE: u64 = 0x10000;
 
 unsafe extern "C" {
     static etext: u8;
 }
 unsafe extern "C" {
     fn enable_mmu(ttbr0: u64);
+}
+
+unsafe extern "C" {
+    static _trampoline: u8;
 }
 
 static KERNEL_PAGE_TABLE: AtomicPtr<PageTable> = AtomicPtr::new(null_mut());
@@ -86,7 +96,23 @@ pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
         UART0_BASE,
         UART0_BASE,
         PAGE_SIZE as u64,
-        AF | PXN | UXN | AP_EL1_RW_EL0_NONE,
+        AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
+    )?;
+
+    // map GIC no executable and read/write
+    map_pages(
+        page_table,
+        GICD_BASE,
+        GICD_BASE,
+        GICD_SIZE,
+        AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
+    )?;
+    map_pages(
+        page_table,
+        GICC_BASE,
+        GICC_BASE,
+        GICC_SIZE,
+        AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
     )?;
 
     // map kernel text executable and read-only.
@@ -97,7 +123,7 @@ pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
         KERNBASE,
         KERNBASE,
         text_size,
-        AF | UXN | AP_EL1_RO_EL0_NONE,
+        AF | UXN | ATTRIDX0 | AP_EL1_RO_EL0_NONE,
     )?;
 
     // map kernel data and the physical RAM we'll make use of.
@@ -106,7 +132,17 @@ pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
         text_end,
         text_end,
         (RAM_END as u64) - text_end,
-        AF | PXN | UXN | AP_EL1_RW_EL0_NONE,
+        AF | PXN | UXN | ATTRIDX0 | AP_EL1_RW_EL0_NONE,
+    )?;
+
+    // map the trampoline for trap entry/exit to
+    // the highest virtual address in the kernel.
+    map_pages(
+        page_table,
+        TRAMPOLINE,
+        unsafe { (&_trampoline as *const u8) as u64 },
+        PAGE_SIZE as u64,
+        AF | UXN | ATTRIDX0 | AP_EL1_RO_EL0_NONE,
     )?;
 
     KERNEL_PAGE_TABLE.store(page_table, Ordering::SeqCst);
@@ -158,7 +194,7 @@ fn map_pages(
                     return Err(MapError::AlreadyMapped);
                 }
 
-                *pte = page_address_to_page_entry(pa) | DESC_VALID | DESC_PAGE | ATTRIDX1 | perm;
+                *pte = page_address_to_page_entry(pa) | DESC_VALID | DESC_PAGE | perm;
                 if a == last {
                     break;
                 }
