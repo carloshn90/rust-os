@@ -5,11 +5,6 @@ rustflags = [
     "-C", "link-arg=-Tcrates/kernel/linker.ld"
 ]
 
-# run
-# runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -drive if=none,file=disk.img,format=raw,id=hd0 -device virtio-blk-device,drive=hd0 -kernel"
-# debug
-# runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -drive if=none,file=disk.img,format=raw,id=hd0 -device virtio-blk-device,drive=hd0 -S -s -kernel"
-
 [env]
 DEFMT_LOG = "debug"
 
