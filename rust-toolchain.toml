@@ -1,3 +1,4 @@
 [toolchain]
 channel = "nightly"
-components = ["llvm-tools-preview", "rust-src"]
+targets = ["aarch64-unknown-none"]
+components = ["llvm-tools-preview", "rust-src", "rust-analyzer"]

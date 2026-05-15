@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["crates/kernel"]
+members = ["crates/kernel", "crates/mkfs", "crates/xtask", "crates/xtask"]
+resolver = "2"
 
 [dependencies]
 

@@ -7,8 +7,9 @@ use hal::klog;
 
 use crate::{
     memory::{PAGE_SIZE, RAM_END, k_alloc, pg_round_up},
-    process::NUMBER_OF_PROCESS,
+    process::{NUMBER_OF_PROCESS, Process},
     uart_logger::{UART0_BASE, logger},
+    virtio_disk::VIRTIO0,
 };
 
 type Pte = u64;
@@ -37,6 +38,7 @@ const UXN: u64 = 1 << 54;
 
 const KERNBASE: u64 = 0x40080000;
 const TRAMPOLINE: u64 = MAX_VA - PAGE_SIZE as u64;
+const TRAP_FRAME: u64 = TRAMPOLINE - PAGE_SIZE as u64;
 const GICD_BASE: u64 = 0x0800_0000;
 const GICC_BASE: u64 = 0x0801_0000;
 const GICD_SIZE: u64 = 0x10000;
@@ -57,6 +59,7 @@ static KERNEL_PAGE_TABLE: AtomicPtr<PageTable> = AtomicPtr::new(null_mut());
 
 // AArch64 4k-page tables (one table page == 512 64-bit descriptors).
 #[repr(C, align(4096))]
+#[derive(Copy, Clone)]
 pub struct PageTable {
     pub entries: [u64; 512],
 }
@@ -68,22 +71,7 @@ pub enum MapError {
     UnalignedSize,
     WalkFailed,
     AlreadyMapped,
-}
-
-#[inline]
-fn level_index(level: usize, va: u64) -> usize {
-    const SHIFTS: [usize; 4] = [39, 30, 21, 12];
-    ((va >> SHIFTS[level]) & 0x1FF) as usize
-}
-
-#[inline]
-fn page_address_to_page_entry(pa: u64) -> Pte {
-    pa & 0x0000_FFFF_FFFF_F000
-}
-
-#[inline]
-fn pte_to_page_address(pa: u64) -> Pte {
-    pa & 0x0000_FFFF_FFFF_F000
+    AllocationFailed,
 }
 
 pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
@@ -97,6 +85,15 @@ pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
         UART0_BASE,
         UART0_BASE,
         PAGE_SIZE as u64,
+        AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
+    )?;
+
+    // map virtio mmio disk interface read/write
+    map_pages(
+        page_table,
+        VIRTIO0 as u64,
+        VIRTIO0 as u64,
+        (4 * PAGE_SIZE) as u64,
         AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
     )?;
 
@@ -157,6 +154,45 @@ pub fn k_vm_init_hart() {
     unsafe { enable_mmu(KERNEL_PAGE_TABLE.load(Ordering::SeqCst) as u64) };
 }
 
+#[inline]
+pub fn k_stack(p: usize) -> u64 {
+    TRAMPOLINE - ((p + 1) as u64) * 2 * (PAGE_SIZE as u64)
+}
+
+pub fn proc_page_table(p: &Process) -> Result<u64, MapError> {
+    let run = k_alloc();
+
+    if run.is_null() {
+        return Err(MapError::AllocationFailed);
+    }
+
+    let page_table = run as *mut PageTable;
+    unsafe { core::ptr::write_bytes(page_table as *mut u8, 0, PAGE_SIZE) };
+
+    // map the trampoline code (for system call return)
+    // at the highest user virtual address.
+    // only the supervisor uses it, on the way
+    // to/from user space, so not PTE_U.
+    map_pages(
+        page_table,
+        TRAMPOLINE,
+        unsafe { (&_trampoline as *const u8) as u64 },
+        PAGE_SIZE as u64,
+        AF | UXN | ATTRIDX0 | AP_EL1_RO_EL0_RO,
+    )?; // fixme clean allocated page in case of error
+
+    // map the trapframe page just below the trampoline page, for trampoline.S.
+    map_pages(
+        page_table,
+        TRAP_FRAME,
+        p.trap_frame,
+        PAGE_SIZE as u64,
+        AF | ATTRIDX0 | AP_EL1_RW_EL0_RW,
+    )?;
+
+    Ok(page_table as u64)
+}
+
 fn map_pages(
     page_table: *mut PageTable,
     va: u64,
@@ -213,11 +249,6 @@ fn map_pages(
     Ok(())
 }
 
-#[inline]
-fn k_stack(p: usize) -> u64 {
-    TRAMPOLINE - ((p + 1) as u64) * 2 * (PAGE_SIZE as u64)
-}
-
 fn proc_map_stacks(page_table: *mut PageTable) -> Result<(), MapError> {
     for i in 0..NUMBER_OF_PROCESS {
         let pa = k_alloc();
@@ -237,6 +268,22 @@ fn proc_map_stacks(page_table: *mut PageTable) -> Result<(), MapError> {
     }
 
     Ok(())
+}
+
+#[inline]
+fn level_index(level: usize, va: u64) -> usize {
+    const SHIFTS: [usize; 4] = [39, 30, 21, 12];
+    ((va >> SHIFTS[level]) & 0x1FF) as usize
+}
+
+#[inline]
+fn page_address_to_page_entry(pa: u64) -> Pte {
+    pa & 0x0000_FFFF_FFFF_F000
+}
+
+#[inline]
+fn pte_to_page_address(pa: u64) -> Pte {
+    pa & 0x0000_FFFF_FFFF_F000
 }
 
 fn walk(mut page_table: *mut PageTable, va: u64) -> Option<*mut Pte> {

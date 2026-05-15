@@ -14,5 +14,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mkfs"
+version = "0.1.0"
+
+[[package]]
 name = "rust-os"
+version = "0.1.0"
+
+[[package]]
+name = "xtask"
 version = "0.1.0"

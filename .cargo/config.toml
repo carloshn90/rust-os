@@ -6,17 +6,13 @@ rustflags = [
 ]
 
 # run
-runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -kernel"
+# runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -drive if=none,file=disk.img,format=raw,id=hd0 -device virtio-blk-device,drive=hd0 -kernel"
 # debug
-# runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -S -s -kernel"
-
-[build]
-target = "aarch64-unknown-none"
+# runner = "qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a53 -m 256M -nographic -serial mon:stdio -drive if=none,file=disk.img,format=raw,id=hd0 -device virtio-blk-device,drive=hd0 -S -s -kernel"
 
 [env]
 DEFMT_LOG = "debug"
 
 [alias]
-qemu = "run -p kernel --target aarch64-unknown-none"
-qemu-release = "run -p kernel --release --target aarch64-unknown-none"
+run-os = "run --package xtask"
 

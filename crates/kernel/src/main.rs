@@ -1,10 +1,12 @@
 #![no_std]
 #![no_main]
 
+mod disk;
 mod memory;
 mod process;
 pub mod scheduler;
 mod uart_logger;
+mod virtio_disk;
 mod virtual_memory;
 
 use core::panic::PanicInfo;
@@ -14,29 +16,16 @@ use hal::{klog, log::Logger};
 core::arch::global_asm!(include_str!("boot.S"));
 core::arch::global_asm!(include_str!("mmu.S"));
 core::arch::global_asm!(include_str!("trampoline.S"));
+core::arch::global_asm!(include_str!("switch.S"));
 
 use crate::{
     memory::k_me_init,
-    process::{Process, ProcessManager, ProcessState, RunnableProcess},
-    scheduler::Scheduler,
+    process::{proc_init, user_init},
+    scheduler::schedule,
     uart_logger::{UartLogger, init_logging, logger},
+    virtio_disk::virtio_disk_init,
     virtual_memory::{k_vm_init, k_vm_init_hart},
 };
-
-struct AProcess;
-struct BProcess;
-
-impl RunnableProcess for AProcess {
-    fn run(&self) {
-        logger().log("A\n");
-    }
-}
-
-impl RunnableProcess for BProcess {
-    fn run(&self) {
-        logger().log("B\n");
-    }
-}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main() -> ! {
@@ -73,23 +62,10 @@ pub fn k_main() -> ! {
     k_vm_init_hart();
     logger().log("rustOS: MMU enabled\n");
 
-    let l0 = 0;
-    let mut p = ProcessManager::new();
+    virtio_disk_init();
 
-    let p_a = Process {
-        process: Some(&AProcess),
-        pid: p.alloc_pid(),
-        state: ProcessState::RUNNABLE,
-    };
-    let mut sch = Scheduler::init(p_a);
+    proc_init();
+    user_init();
 
-    let p_b = Process {
-        process: Some(&BProcess),
-        pid: p.alloc_pid(),
-        state: ProcessState::RUNNABLE,
-    };
-
-    sch.add(p_b);
-
-    sch.scheduler();
+    schedule();
 }
