@@ -7,7 +7,7 @@ use std::{
 const BSIZE: usize = 1024; // Size in bytes of a single filesystem block.
 const FSSIZE: u32 = 2000; // size of file system in blocks.
 const NINODES: u32 = 200; // Total number of inodes available in the filesystem.
-const FSMAGIC: u32 = 0x10240390; // Magic number used to identify and validate this filesystem format.
+const FSMAGIC: u32 = 0x24031990; // Magic number used to identify and validate this filesystem format.
 const LOGBLOCKS: u32 = 30; // Number of log blocks reserved for the filesystem journal/log.
 const NDIRECT: usize = 12; // Number of direct data block addresses stored in each inode.
 const DIRSIZ: usize = 14; // Maximum number of bytes in a directory entry name.

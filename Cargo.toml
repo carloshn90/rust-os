@@ -1,14 +1,3 @@
-[package]
-name = "rust-os"
-version = "0.1.0"
-edition = "2024"
-
 [workspace]
-members = ["crates/kernel", "crates/mkfs", "crates/xtask", "crates/xtask"]
+members = ["crates/kernel", "crates/mkfs", "crates/user", "crates/xtask"]
 resolver = "2"
-
-[dependencies]
-
-[profile.dev]
-debug = 2
-opt-level = 0

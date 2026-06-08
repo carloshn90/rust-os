@@ -1,12 +1,12 @@
 #![no_std]
 #![no_main]
 
-mod disk;
+mod exec;
+mod irq;
 mod memory;
 mod process;
 pub mod scheduler;
 mod uart_logger;
-mod virtio_disk;
 mod virtual_memory;
 
 use core::panic::PanicInfo;
@@ -19,11 +19,11 @@ core::arch::global_asm!(include_str!("trampoline.S"));
 core::arch::global_asm!(include_str!("switch.S"));
 
 use crate::{
+    irq::init_irq,
     memory::k_me_init,
     process::{proc_init, user_init},
     scheduler::schedule,
     uart_logger::{UartLogger, init_logging, logger},
-    virtio_disk::virtio_disk_init,
     virtual_memory::{k_vm_init, k_vm_init_hart},
 };
 
@@ -62,7 +62,7 @@ pub fn k_main() -> ! {
     k_vm_init_hart();
     logger().log("rustOS: MMU enabled\n");
 
-    virtio_disk_init();
+    init_irq();
 
     proc_init();
     user_init();

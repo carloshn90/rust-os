@@ -1,8 +1,6 @@
 [target.aarch64-unknown-none]
 rustflags = [
     "--check-cfg=cfg(vm_debug)",
-    # "--cfg", "vm_debug",
-    "-C", "link-arg=-Tcrates/kernel/linker.ld"
 ]
 
 [env]
@@ -10,4 +8,11 @@ DEFMT_LOG = "debug"
 
 [alias]
 run-os = "run --package xtask"
+
+# Force panic behavior to abort globally for bare-metal targets
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
 

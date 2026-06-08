@@ -51,11 +51,12 @@ enable_mmu:
   dsb ish
   isb
 
-  // Enable MMU (M=1). Keep caches OFF initially (C=0, I=0).
+  // Enable MMU (M=1) AND enable Caches (C=1, I=1)
   mrs x1, sctlr_el1
-  orr x1, x1, #1              // M
-  bic x1, x1, #(1 << 2)        // C
-  bic x1, x1, #(1 << 12)       // I
+  orr x1, x1, #1              // M bit (Enable MMU)
+  orr x1, x1, #(1 << 2)       // C bit (Enable Data and unified caches)
+  orr x1, x1, #(1 << 12)      // I bit (Enable Instruction cache)
+  
   msr sctlr_el1, x1
   isb
   ret

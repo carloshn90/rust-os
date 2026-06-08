@@ -9,7 +9,6 @@ use crate::{
     memory::{PAGE_SIZE, RAM_END, k_alloc, pg_round_up},
     process::{NUMBER_OF_PROCESS, Process},
     uart_logger::{UART0_BASE, logger},
-    virtio_disk::VIRTIO0,
 };
 
 type Pte = u64;
@@ -22,27 +21,29 @@ const MAX_VA: u64 = 1 << (9 + 9 + 9 + 9 + 12 - 1);
 const DESC_VALID: u64 = 1 << 0;
 const DESC_TABLE: u64 = 1 << 1;
 const DESC_PAGE: u64 = 1 << 1;
-const AF: u64 = 1 << 10;
-const ATTRIDX0: u64 = 0 << 2;
+pub const AF: u64 = 1 << 10;
+pub const ATTRIDX0: u64 = 0 << 2;
 const ATTRIDX1: u64 = 1 << 2;
 
 const AP_EL1_RW_EL0_NONE: u64 = 0b00 << 6;
+pub const AP_EL1_RW_EL0_RW: u64 = 0b01 << 6;
 #[allow(dead_code)]
-const AP_EL1_RW_EL0_RW: u64 = 0b01 << 6;
+const AP_EL1_RW_EL0_RX: u64 = 0b10 << 6;
+pub const AP_EL1_RX_EL0_RX: u64 = 0b11 << 6; // Value: 0xC0 (or 192)
 const AP_EL1_RO_EL0_NONE: u64 = 0b10 << 6;
-#[allow(dead_code)]
 const AP_EL1_RO_EL0_RO: u64 = 0b11 << 6;
 
-const PXN: u64 = 1 << 53;
-const UXN: u64 = 1 << 54;
+pub const PXN: u64 = 1 << 53;
+pub const UXN: u64 = 1 << 54;
 
-const KERNBASE: u64 = 0x40080000;
+const KERNEL_PHYS_BASE: u64 = 0x4008_0000;
 const TRAMPOLINE: u64 = MAX_VA - PAGE_SIZE as u64;
-const TRAP_FRAME: u64 = TRAMPOLINE - PAGE_SIZE as u64;
+pub const TRAP_FRAME: u64 = TRAMPOLINE - PAGE_SIZE as u64;
 const GICD_BASE: u64 = 0x0800_0000;
 const GICC_BASE: u64 = 0x0801_0000;
 const GICD_SIZE: u64 = 0x10000;
 const GICC_SIZE: u64 = 0x10000;
+const VIRTIO0_BASE: usize = 0x0a000000;
 
 unsafe extern "C" {
     static etext: u8;
@@ -55,7 +56,7 @@ unsafe extern "C" {
     static _trampoline: u8;
 }
 
-static KERNEL_PAGE_TABLE: AtomicPtr<PageTable> = AtomicPtr::new(null_mut());
+pub static KERNEL_PAGE_TABLE: AtomicPtr<PageTable> = AtomicPtr::new(null_mut());
 
 // AArch64 4k-page tables (one table page == 512 64-bit descriptors).
 #[repr(C, align(4096))]
@@ -91,8 +92,8 @@ pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
     // map virtio mmio disk interface read/write
     map_pages(
         page_table,
-        VIRTIO0 as u64,
-        VIRTIO0 as u64,
+        VIRTIO0_BASE as u64,
+        VIRTIO0_BASE as u64,
         (4 * PAGE_SIZE) as u64,
         AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
     )?;
@@ -115,11 +116,11 @@ pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
 
     // map kernel text executable and read-only.
     let text_end = pg_round_up(unsafe { &etext as *const u8 as u64 } as usize) as u64;
-    let text_size = text_end - KERNBASE;
+    let text_size = text_end - KERNEL_PHYS_BASE;
     map_pages(
         page_table,
-        KERNBASE,
-        KERNBASE,
+        KERNEL_PHYS_BASE,
+        KERNEL_PHYS_BASE,
         text_size,
         AF | UXN | ATTRIDX0 | AP_EL1_RO_EL0_NONE,
     )?;
@@ -130,7 +131,7 @@ pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
         text_end,
         text_end,
         (RAM_END as u64) - text_end,
-        AF | PXN | UXN | ATTRIDX0 | AP_EL1_RW_EL0_NONE,
+        AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
     )?;
 
     // map the trampoline for trap entry/exit to
@@ -151,7 +152,8 @@ pub fn k_vm_init() -> Result<*mut PageTable, MapError> {
 }
 
 pub fn k_vm_init_hart() {
-    unsafe { enable_mmu(KERNEL_PAGE_TABLE.load(Ordering::SeqCst) as u64) };
+    let kpt = KERNEL_PAGE_TABLE.load(Ordering::SeqCst) as u64;
+    unsafe { enable_mmu(kpt) };
 }
 
 #[inline]
@@ -185,7 +187,7 @@ pub fn proc_page_table(p: &Process) -> Result<u64, MapError> {
     map_pages(
         page_table,
         TRAP_FRAME,
-        p.trap_frame,
+        p.trap_frame as u64,
         PAGE_SIZE as u64,
         AF | ATTRIDX0 | AP_EL1_RW_EL0_RW,
     )?;
@@ -193,7 +195,53 @@ pub fn proc_page_table(p: &Process) -> Result<u64, MapError> {
     Ok(page_table as u64)
 }
 
-fn map_pages(
+pub fn u_vm_alloc(
+    page_table: *mut PageTable,
+    old_size: usize,
+    new_size: usize,
+    perm: u64,
+) -> Result<u64, MapError> {
+    if new_size < old_size {
+        return Ok(old_size as u64);
+    }
+
+    let old_size = pg_round_up(old_size);
+
+    for a in (old_size..new_size).step_by(PAGE_SIZE) {
+        let mem = k_alloc();
+        if mem.is_null() {
+            return Err(MapError::AllocationFailed);
+        }
+        unsafe {
+            core::ptr::write_bytes(mem as *mut u8, 0, PAGE_SIZE);
+        }
+
+        map_pages(page_table, a as u64, mem as u64, PAGE_SIZE as u64, perm)?;
+    }
+
+    Ok(page_table as u64)
+}
+
+pub fn kvm_translate(page_table: *mut PageTable, va: u64) -> Result<*mut u8, MapError> {
+    // This assumes your existing page table walker can find the Level 3 descriptor.
+    // Replace `walk_to_level_3` with your actual page table walking function name.
+    let pte_ptr = walk(page_table, va).ok_or(MapError::WalkFailed)?;
+    unsafe {
+        let pte = *pte_ptr;
+        // Ensure the page entry is actually valid/present
+        if (pte & 0x1) != 0 {
+            // Extract the physical address (Mask out lower attribute bits)
+            // In AArch64 Stage 1, OA[47:12] holds the output address
+            let phys_addr = pte & 0x0000_FFFF_FFFF_F000;
+            // Add the in-page offset from the original virtual address
+            let page_offset = va & (PAGE_SIZE as u64 - 1);
+            return Ok((phys_addr + page_offset) as *mut u8);
+        }
+        Err(MapError::WalkFailed)
+    }
+}
+
+pub fn map_pages(
     page_table: *mut PageTable,
     va: u64,
     mut pa: u64,
@@ -286,9 +334,17 @@ fn pte_to_page_address(pa: u64) -> Pte {
     pa & 0x0000_FFFF_FFFF_F000
 }
 
+#[inline]
+fn is_canonical_addr(va: u64) -> bool {
+    let is_lower = (va & 0xFFFF_0000_0000_0000) == 0;
+    let is_upper = (va & 0xFFFF_0000_0000_0000) == 0xFFFF_0000_0000_0000;
+
+    is_lower || is_upper
+}
+
 fn walk(mut page_table: *mut PageTable, va: u64) -> Option<*mut Pte> {
-    if va >= MAX_VA {
-        panic!("walk");
+    if !is_canonical_addr(va) {
+        panic!("walk: Non-canonical virtual address 0x{:X}", va);
     }
 
     for level in 0..3 {
@@ -303,7 +359,9 @@ fn walk(mut page_table: *mut PageTable, va: u64) -> Option<*mut Pte> {
         } else {
             let next = k_alloc();
             unsafe { core::ptr::write_bytes(next as *mut u8, 0, PAGE_SIZE) };
+
             *pte = page_address_to_page_entry(next as u64) | DESC_VALID | DESC_TABLE;
+
             page_table = next as *mut PageTable;
         }
     }

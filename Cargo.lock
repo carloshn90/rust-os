@@ -18,7 +18,7 @@ name = "mkfs"
 version = "0.1.0"
 
 [[package]]
-name = "rust-os"
+name = "user"
 version = "0.1.0"
 
 [[package]]

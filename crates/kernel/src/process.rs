@@ -1,10 +1,11 @@
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering, fence};
 
 use hal::klog;
 
 use crate::{
+    exec::k_exec,
     memory::{PAGE_SIZE, k_alloc},
-    scheduler::CPU,
+    scheduler::{WaitChannel, my_proc},
     uart_logger::logger,
     virtual_memory::{k_stack, proc_page_table},
 };
@@ -17,32 +18,58 @@ pub const EMPTY_PROCESS: Process = Process {
     k_stack: 0,
     page_table: 0,
     context: Context { x: [0; 31], sp: 0 },
-    trap_frame: 0,
+    trap_frame: core::ptr::null_mut(),
+    chan: None,
 };
+
+unsafe extern "C" {
+    // This takes a raw pointer to the trap frame
+    pub fn user_trap_return(tf: *mut TrapFrame) -> !;
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn forkret() {
     unsafe {
-        let cpu = core::ptr::addr_of_mut!(CPU);
-        let process = (*cpu).process;
+        let process = my_proc();
 
         if process.is_null() {
-            panic!("forkret: no current process");
+            panic!("[forkret]: no current process");
         }
 
         klog!(logger(), "pid = {}, return\n", (*process).pid);
+
+        // let super_block = fs_init(ROOT_DEV);
+        // klog!(logger(), "super_block = {}\n", super_block);
+
+        let tf = k_exec("/init", &mut (*process)).expect("[forkret] k_exec fail");
+        // sleep(WaitChannel::DiskFree);
+
+        logger().log("[forkret] jumping into hello world bin\n");
+
+        fence(Ordering::SeqCst);
+        user_trap_return(tf);
     }
-    hal::halt::halt();
 }
 
+#[repr(C)]
+pub struct TrapFrame {
+    pub regs: [u64; 31], // x0 to x30 (31 * 8 = 248 bytes)
+    pub spsr: u64,       // Offset 248
+    pub epc: u64,        // Offset 256
+    pub sp: u64,         // Offset 264
+    pub ttbr0: u64,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct Process {
-    pub pid: u8,             // Process ID
-    pub state: ProcessState, // Process state
-    pub k_stack: u64,        // Virtual address of kernel stack
-    pub page_table: u64,     // User page table
-    pub context: Context,    // swtch() here to run process
-    pub trap_frame: u64,     // data page for trampoline.S
+    pub pid: u8,                    // Process ID
+    pub state: ProcessState,        // Process state
+    pub k_stack: u64,               // Virtual address of kernel stack
+    pub page_table: u64,            // User page table
+    pub context: Context,           // swtch() here to run process
+    pub trap_frame: *mut TrapFrame, // data page for trampoline.S
+    pub chan: Option<WaitChannel>,  // If some, sleeping on chan
 }
 
 #[repr(C)]
@@ -58,6 +85,7 @@ pub enum ProcessState {
     RUNNING,
     USED,
     UNUSED,
+    SLEEPING,
 }
 
 pub static mut PROC: [Process; NUMBER_OF_PROCESS] = [EMPTY_PROCESS; NUMBER_OF_PROCESS];
@@ -86,12 +114,17 @@ fn fn_addr(f: extern "C" fn()) -> u64 {
 fn alloc_proc() -> &'static mut Process {
     let p = first_unused_proc().unwrap();
 
-    let tf = k_alloc();
-    if tf.is_null() {
+    let tf_raw = k_alloc();
+    if tf_raw.is_null() {
         panic!("k_alloc");
     }
+
+    let tf = tf_raw as *mut TrapFrame;
+    unsafe {
+        core::ptr::write_bytes(tf as *mut u8, 0, PAGE_SIZE);
+    }
     p.pid = alloc_pid();
-    p.trap_frame = tf as u64;
+    p.trap_frame = tf;
     p.page_table = proc_page_table(p).unwrap();
     p.context = Context::default();
     p.context.sp = (p.k_stack + PAGE_SIZE as u64) & !0xF;
@@ -121,7 +154,7 @@ fn alloc_pid() -> u8 {
 // including user pages.
 #[allow(dead_code)]
 fn freeproc(p: &mut Process) {
-    p.trap_frame = 0;
+    p.trap_frame = core::ptr::null_mut();
     p.page_table = 0;
     p.pid = 0;
     p.context = Context::default();

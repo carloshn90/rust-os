@@ -95,7 +95,7 @@ vectors:
   .space 0x80 - 4
 
   // 0x400: Lower EL (AArch64), Sync
-  b exc_sync
+  b exc_sync_user
   .space 0x80 - 4
   // 0x480: Lower EL (AArch64), IRQ
   b exc_irq
@@ -123,10 +123,29 @@ vectors:
 exc_sync:
   wfe
   b exc_sync
+exc_sync_user:
+    bl save_context       // x0 points to the TrapFrame
+    
+    // 1. Advance pc past the svc instruction
+    ldr x1, [x0, #256]    // tf.epc
+    add x1, x1, #4
+    str x1, [x0, #256]
+    
+    // 2. Prepare arguments for rust_syscall_handler(syscall_id, arg0, arg1)
+    mov x19, x0           // Back up TrapFrame pointer
+    
+    ldr x0, [x19, #64]    // tf.x8  -> goes to Rust's 'syscall_id' (x0)
+    ldr x1, [x19, #0]     // tf.x0  -> goes to Rust's 'arg0'       (x1)
+    ldr x2, [x19, #8]     // tf.x1  -> goes to Rust's 'arg1'       (x2) <-- CRITICAL!
+    
+    bl rust_syscall_handler
+    
+    mov x0, x19
+    b load_context  
 exc_irq:
-  bl save_context
-  // bl rust_irq_handler
-  b load_context
+    bl save_context
+    bl rust_irq_handler
+    b load_context
 exc_fiq:
   b exc_sync
 exc_serr:
@@ -134,76 +153,65 @@ exc_serr:
 
 .global save_context
 save_context:
-  // Use x20 as the Context* base so we can save x20 too.
-  mrs x20, tpidr_el1
+    sub sp, sp, #0x110
 
-  // Save x0..x29
-  stp x0,  x1,  [x20, #0x00]
-  stp x2,  x3,  [x20, #0x10]
-  stp x4,  x5,  [x20, #0x20]
-  stp x6,  x7,  [x20, #0x30]
-  stp x8,  x9,  [x20, #0x40]
-  stp x10, x11, [x20, #0x50]
-  stp x12, x13, [x20, #0x60]
-  stp x14, x15, [x20, #0x70]
-  stp x16, x17, [x20, #0x80]
-  stp x18, x19, [x20, #0x90]
-  stp x20, x21, [x20, #0xA0]   // NOTE: saves x20 into its own slot x[20]
-  stp x22, x23, [x20, #0xB0]
-  stp x24, x25, [x20, #0xC0]
-  stp x26, x27, [x20, #0xD0]
-  stp x28, x29, [x20, #0xE0]
+    stp x0,  x1,  [sp, #0x00]
+    stp x2,  x3,  [sp, #0x10]
+    stp x4,  x5,  [sp, #0x20]
+    stp x6,  x7,  [sp, #0x30]
+    stp x8,  x9,  [sp, #0x40]
+    stp x10, x11, [sp, #0x50]
+    stp x12, x13, [sp, #0x60]
+    stp x14, x15, [sp, #0x70]
+    stp x16, x17, [sp, #0x80]
+    stp x18, x19, [sp, #0x90]
+    stp x20, x21, [sp, #0xA0]
+    stp x22, x23, [sp, #0xB0]
+    stp x24, x25, [sp, #0xC0]
+    stp x26, x27, [sp, #0xD0]
+    stp x28, x29, [sp, #0xE0]
+    str x30,      [sp, #0xF0]
 
-  // Save x30
-  str x30, [x20, #0xF0]
+    add x0, sp, #0x110
+    str x0, [sp, #0xF8]      // interrupted SP before subtract
+    mrs x0, elr_el1
+    str x0, [sp, #0x100]
+    mrs x0, spsr_el1
+    str x0, [sp, #0x108]
 
-  // Save SP, ELR, SPSR
-  mov x0, sp
-  str x0, [x20, #0xF8]
-  mrs x0, elr_el1
-  str x0, [x20, #0x100]
-  mrs x0, spsr_el1
-  str x0, [x20, #0x108]
-
-  // Call Rust IRQ handler: x0 = current Context*, returns x0 = next Context*
-  mov x0, x20
-  ret
-
+    mov x0, sp
+    ret
+    
 .global load_context
 load_context:
-  // Switch to next context
-  msr tpidr_el1, x0
-  mov x21, x0        // x21 = next Context* base
+    mov sp, x0
 
-  // Restore SP/ELR/SPSR
-  ldr x1, [x21, #0xF8]
-  mov sp, x1
-  ldr x1, [x21, #0x100]
-  msr elr_el1, x1
-  ldr x1, [x21, #0x108]
-  msr spsr_el1, x1
+    ldr x10, [sp, #0x100]
+    msr elr_el1, x10
+    ldr x10, [sp, #0x108]
+    msr spsr_el1, x10
 
-  // Restore x0..x29
-  ldp x0,  x1,  [x21, #0x00]
-  ldp x2,  x3,  [x21, #0x10]
-  ldp x4,  x5,  [x21, #0x20]
-  ldp x6,  x7,  [x21, #0x30]
-  ldp x8,  x9,  [x21, #0x40]
-  ldp x10, x11, [x21, #0x50]
-  ldp x12, x13, [x21, #0x60]
-  ldp x14, x15, [x21, #0x70]
-  ldp x16, x17, [x21, #0x80]
-  ldp x18, x19, [x21, #0x90]
-  ldp x20, x21, [x21, #0xA0]   // careful: clobbers base, but we're done using it after this point
-  ldp x22, x23, [x21, #0xB0]
-  ldp x24, x25, [x21, #0xC0]
-  ldp x26, x27, [x21, #0xD0]
-  ldp x28, x29, [x21, #0xE0]
+    ldp x0,  x1,  [sp, #0x00]
+    ldp x2,  x3,  [sp, #0x10]
+    ldp x4,  x5,  [sp, #0x20]
+    ldp x6,  x7,  [sp, #0x30]
+    ldp x8,  x9,  [sp, #0x40]
+    ldp x10, x11, [sp, #0x50]
+    ldp x12, x13, [sp, #0x60]
+    ldp x14, x15, [sp, #0x70]
+    ldp x16, x17, [sp, #0x80]
+    ldp x18, x19, [sp, #0x90]
+    ldp x20, x21, [sp, #0xA0]
+    ldp x22, x23, [sp, #0xB0]
+    ldp x24, x25, [sp, #0xC0]
+    ldp x26, x27, [sp, #0xD0]
+    ldp x28, x29, [sp, #0xE0]
+    ldr x30,      [sp, #0xF0]
 
-  // Restore x30
-  ldr x30, [x21, #0xF0]
-  eret
-
+    ldr x11, [sp, #0xF8]
+    add sp, sp, #0x110
+    mov sp, x11
+    eret
 
 .global start_first
 start_first:
@@ -235,3 +243,51 @@ start_first:
   ldr x30,       [x19, #0xF0]
   ldr x19, [x19, #0x98]
   eret
+
+.global user_trap_return
+.type user_trap_return, %function
+user_trap_return:
+    // x0 points to the TrapFrame struct (Must be a high-memory kernel VA via TTBR1)
+    
+    // 1. SWITCH PAGE TABLE TO THE USER PROCESS SPACE
+    ldr x1, [x0, #272]      // Load tf.ttbr0 (contains process root PA + ASID)
+    msr ttbr0_el1, x1       // Update user space page table register
+    
+    // NOTE: If using ASIDs, no 'tlbi' is required here!
+    isb                     // Context synchronization barrier to apply the new TTBR0
+
+    // 2. Restore system registers for EL0
+    ldr x1, [x0, #248]      // Load tf.spsr
+    msr spsr_el1, x1        
+    
+    ldr x2, [x0, #256]      // Load tf.epc (User entry point)
+    msr elr_el1, x2         
+    
+    ldr x3, [x0, #264]      // Load tf.sp (User stack pointer)
+    msr sp_el0, x3          
+    
+    // 3. Restore general purpose registers x1 through x30
+    ldp x1, x2, [x0, #8]
+    ldp x3, x4, [x0, #24]
+    ldp x5, x6, [x0, #40]
+    ldp x7, x8, [x0, #56]
+    ldp x9, x10, [x0, #72]
+    ldp x11, x12, [x0, #88]
+    ldp x13, x14, [x0, #104]
+    ldp x15, x16, [x0, #120]
+    ldp x17, x18, [x0, #136]
+    ldp x19, x20, [x0, #152]
+    ldp x21, x22, [x0, #168]
+    ldp x23, x24, [x0, #184]
+    ldp x25, x26, [x0, #200]
+    ldp x27, x28, [x0, #216]
+    ldp x29, x30, [x0, #232]
+    
+    // 4. Safely restore x0 last from the high-memory structure
+    ldr x0, [x0, #0]
+    
+    // 5. Synchronize architectural state changes 
+    isb
+    
+    // 6. Drop down into EL0!
+    eret
