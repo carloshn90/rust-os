@@ -9,7 +9,3 @@ path = "src/main.rs"
 
 [dependencies]
 hal = { path = "../hal"}
-
-[profile.dev]
-debug = 2
-opt-level = 0

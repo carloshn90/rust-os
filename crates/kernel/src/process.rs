@@ -23,7 +23,6 @@ pub const EMPTY_PROCESS: Process = Process {
 };
 
 unsafe extern "C" {
-    // This takes a raw pointer to the trap frame
     pub fn user_trap_return(tf: *mut TrapFrame) -> !;
 }
 
@@ -38,11 +37,11 @@ pub extern "C" fn forkret() {
 
         klog!(logger(), "pid = {}, return\n", (*process).pid);
 
-        // let super_block = fs_init(ROOT_DEV);
-        // klog!(logger(), "super_block = {}\n", super_block);
-
-        let tf = k_exec("/init", &mut (*process)).expect("[forkret] k_exec fail");
-        // sleep(WaitChannel::DiskFree);
+        let tf = k_exec(
+            "../../../target/aarch64-unknown-none/debug/user",
+            &mut (*process),
+        )
+        .expect("[forkret] k_exec fail");
 
         logger().log("[forkret] jumping into hello world bin\n");
 

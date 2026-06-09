@@ -21,35 +21,6 @@ fn main() {
         exit(1);
     }
 
-    println!("Extracting raw user binary...");
-    let user_bin_path = "target/user_hello.bin";
-
-    let objcopy_status = Command::new("cargo")
-        .args([
-            "objcopy",
-            "-p",
-            "user",
-            "--target",
-            "aarch64-unknown-none",
-            "--",
-            "-O",
-            "binary",
-            user_bin_path, // Only pass the output binary path here
-        ])
-        .env(
-            "CARGO_TARGET_AARCH64_UNKNOWN_NONE_RUSTFLAGS",
-            "-C link-arg=-Tcrates/user/user_linker.ld -C link-arg=--gc-sections -C relocation-model=static"
-        )
-        .status()
-        .expect("Failed to run cargo objcopy on user binary");
-
-    if !objcopy_status.success() {
-        eprintln!(
-            "Error: Make sure 'cargo-binutils' is installed (`cargo install cargo-binutils`)"
-        );
-        exit(1);
-    }
-
     println!("Building kernel...");
 
     let build_kernel_status = Command::new("cargo")

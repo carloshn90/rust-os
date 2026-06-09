@@ -171,6 +171,16 @@ pub fn proc_page_table(p: &Process) -> Result<u64, MapError> {
     let page_table = run as *mut PageTable;
     unsafe { core::ptr::write_bytes(page_table as *mut u8, 0, PAGE_SIZE) };
 
+    let text_end = pg_round_up(unsafe { &etext as *const u8 as u64 } as usize) as u64;
+    let text_size = text_end - KERNEL_PHYS_BASE;
+    map_pages(
+        page_table,
+        KERNEL_PHYS_BASE,
+        KERNEL_PHYS_BASE,
+        text_size,
+        AF | UXN | ATTRIDX0 | AP_EL1_RO_EL0_NONE,
+    )?;
+
     // map the trampoline code (for system call return)
     // at the highest user virtual address.
     // only the supervisor uses it, on the way

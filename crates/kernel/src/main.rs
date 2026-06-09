@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod elf;
 mod exec;
 mod irq;
 mod memory;
