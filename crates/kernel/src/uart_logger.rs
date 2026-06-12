@@ -1,6 +1,6 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use hal::log::Logger;
+use hal::log::{LogLevel, Logger};
 
 // QEMU `virt` PL011 UART base.
 pub const UART0_BASE: u64 = 0x0900_0000;
@@ -9,6 +9,7 @@ pub struct UartLogger;
 
 static UART_LOGGER: UartLogger = UartLogger;
 static LOGGING_INITIALISED: AtomicBool = AtomicBool::new(false);
+static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(LogLevel::Info as u8);
 
 impl UartLogger {
     #[inline(always)]
@@ -25,6 +26,12 @@ impl UartLogger {
         // FR (0x18) bit5 = TXFF (transmit FIFO full)
         while (Self::mmio_read(0x18) & (1 << 5)) != 0 {}
         Self::mmio_write(0x00, c as u32);
+    }
+
+    fn getc() -> u8 {
+        // FR (0x18) bit4 = RXFE (receive FIFO empty) — spin until a byte arrives
+        while (Self::mmio_read(0x18) & (1 << 4)) != 0 {}
+        (Self::mmio_read(0x00) & 0xFF) as u8
     }
 
     pub(crate) fn puts(s: &str) {
@@ -45,6 +52,10 @@ impl hal::log::Logger for UartLogger {
             panic!("Error loging");
         }
     }
+
+    fn enabled(&self, level: LogLevel) -> bool {
+        (level as u8) >= MIN_LOG_LEVEL.load(Ordering::Relaxed)
+    }
 }
 
 pub fn init_logging() {
@@ -53,4 +64,13 @@ pub fn init_logging() {
 
 pub fn logger() -> &'static dyn Logger {
     &UART_LOGGER
+}
+
+pub fn set_min_log_level(level: LogLevel) {
+    MIN_LOG_LEVEL.store(level as u8, Ordering::Relaxed);
+}
+
+/// Read one byte from the PL011 UART (blocking).
+pub fn uart_getc() -> u8 {
+    UartLogger::getc()
 }

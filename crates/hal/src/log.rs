@@ -1,7 +1,20 @@
 use core::fmt;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum LogLevel {
+    Debug = 0,
+    Info = 1,
+    Warn = 2,
+    Error = 3,
+}
+
 pub trait Logger {
     fn log(&self, s: &str);
+
+    fn enabled(&self, _level: LogLevel) -> bool {
+        true
+    }
 
     fn log_fmt(&self, args: fmt::Arguments) {
         // Default implementation: write formatted output into the logger
@@ -18,13 +31,26 @@ pub trait Logger {
         let mut a = Adapter(self);
         let _ = fmt::write(&mut a, args);
     }
+
+    fn log_level_fmt(&self, level: LogLevel, args: fmt::Arguments) {
+        if self.enabled(level) {
+            self.log_fmt(args);
+        }
+    }
 }
 
 /// Convenience macro (like println!, but for your Logger)
 #[macro_export]
 macro_rules! klog {
     ($logger:expr, $($arg:tt)*) => {{
-        $logger.log_fmt(core::format_args!($($arg)*));
+        $logger.log_level_fmt($crate::log::LogLevel::Info, core::format_args!($($arg)*));
+    }};
+}
+
+#[macro_export]
+macro_rules! kdebug {
+    ($logger:expr, $($arg:tt)*) => {{
+        $logger.log_level_fmt($crate::log::LogLevel::Debug, core::format_args!($($arg)*));
     }};
 }
 

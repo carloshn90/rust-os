@@ -121,29 +121,53 @@ vectors:
   .space 0x80 - 4
 
 exc_sync:
+  mrs x0, esr_el1
+  mrs x1, elr_el1
+  mrs x2, far_el1
+  bl rust_kernel_sync_fault
+1:
   wfe
-  b exc_sync
+  b 1b
 exc_sync_user:
-    bl save_context       // x0 points to the TrapFrame
-    
-    // 1. Advance pc past the svc instruction
-    ldr x1, [x0, #256]    // tf.epc
-    add x1, x1, #4
-    str x1, [x0, #256]
-    
-    // 2. Prepare arguments for rust_syscall_handler(syscall_id, arg0, arg1)
-    mov x19, x0           // Back up TrapFrame pointer
-    
-    ldr x0, [x19, #64]    // tf.x8  -> goes to Rust's 'syscall_id' (x0)
-    ldr x1, [x19, #0]     // tf.x0  -> goes to Rust's 'arg0'       (x1)
-    ldr x2, [x19, #8]     // tf.x1  -> goes to Rust's 'arg1'       (x2) <-- CRITICAL!
-    
-    bl rust_syscall_handler
-    
-    mov x0, x19
-    b load_context  
+  // `bl save_context` below will overwrite x30 with the kernel return address,
+  // destroying the user LR before save_context can store it.  Stash x30 in
+  // tpidrro_el0 (writable from EL1, not used by userspace in this OS) so we can
+  // patch the frame slot [frame+0xF0] after save_context returns.
+  msr tpidrro_el0, x30
+  bl save_context       // x0 points to the TrapFrame
+  mov x19, x0           // Keep TrapFrame pointer
+  mrs x10, tpidrro_el0  // recover user LR
+  str x10, [x19, #0xF0] // patch x30 slot in frame with the real user LR
+
+  // Route only SVC64 (EC=0x15) to syscall handling.
+  mrs x9, esr_el1
+  lsr x10, x9, #26
+  cmp x10, #0x15
+  b.ne exc_sync_user_fault
+
+  // rust_syscall_handler(syscall_id, arg0, arg1, ctx)
+  ldr x0, [x19, #64]    // tf.x8 -> syscall_id
+  ldr x1, [x19, #0]     // tf.x0 -> arg0
+  ldr x2, [x19, #8]     // tf.x1 -> arg1
+  mov x3, x19           // ctx  = saved-context ptr (for writing return value)
+  bl rust_syscall_handler
+
+  mov x0, x19
+  b load_context
+
+exc_sync_user_fault:
+  mrs x2, far_el1
+  ldr x1, [x19, #256]   // faulting ELR
+  mov x0, x9            // ESR
+  bl rust_user_sync_fault
+1:
+  wfe
+  b 1b
 exc_irq:
+    msr tpidrro_el0, x30  // same LR-stash pattern as exc_sync_user
     bl save_context
+    mrs x10, tpidrro_el0  // recover the LR that was active before the IRQ
+    str x10, [x0, #0xF0]  // patch x30 slot (x0 = frame ptr returned by save_context)
     bl rust_irq_handler
     b load_context
 exc_fiq:
@@ -153,7 +177,7 @@ exc_serr:
 
 .global save_context
 save_context:
-    sub sp, sp, #0x110
+  sub sp, sp, #0x130
 
     stp x0,  x1,  [sp, #0x00]
     stp x2,  x3,  [sp, #0x10]
@@ -172,12 +196,18 @@ save_context:
     stp x28, x29, [sp, #0xE0]
     str x30,      [sp, #0xF0]
 
-    add x0, sp, #0x110
+    add x0, sp, #0x130
     str x0, [sp, #0xF8]      // interrupted SP before subtract
     mrs x0, elr_el1
     str x0, [sp, #0x100]
     mrs x0, spsr_el1
     str x0, [sp, #0x108]
+    mrs x0, sp_el0
+    str x0, [sp, #0x110]
+    // Save current user page-table root so load_context can return with the
+    // right address space even after sleeping/scheduling to another process.
+    mrs x0, ttbr0_el1
+    str x0, [sp, #0x118]
 
     mov x0, sp
     ret
@@ -190,6 +220,14 @@ load_context:
     msr elr_el1, x10
     ldr x10, [sp, #0x108]
     msr spsr_el1, x10
+    ldr x10, [sp, #0x110]
+    msr sp_el0, x10
+    ldr x10, [sp, #0x118]
+    msr ttbr0_el1, x10
+    dsb ishst
+    tlbi vmalle1
+    dsb ish
+    isb
 
     ldp x0,  x1,  [sp, #0x00]
     ldp x2,  x3,  [sp, #0x10]
@@ -209,7 +247,7 @@ load_context:
     ldr x30,      [sp, #0xF0]
 
     ldr x11, [sp, #0xF8]
-    add sp, sp, #0x110
+    add sp, sp, #0x130
     mov sp, x11
     eret
 
@@ -252,9 +290,13 @@ user_trap_return:
     // 1. SWITCH PAGE TABLE TO THE USER PROCESS SPACE
     ldr x1, [x0, #272]      // Load tf.ttbr0 (contains process root PA + ASID)
     msr ttbr0_el1, x1       // Update user space page table register
-    
-    // NOTE: If using ASIDs, no 'tlbi' is required here!
-    isb                     // Context synchronization barrier to apply the new TTBR0
+
+  // We currently run with ASID 0 for all processes. Flush stale stage-1 EL1
+  // translations after TTBR0 switch so exec/fork cannot observe old mappings.
+  dsb ishst
+  tlbi vmalle1
+  dsb ish
+  isb                     // Context synchronization barrier to apply the new TTBR0
 
     // 2. Restore system registers for EL0
     ldr x1, [x0, #248]      // Load tf.spsr

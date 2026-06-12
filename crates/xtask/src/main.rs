@@ -7,9 +7,19 @@ fn main() {
     let is_debug = args.iter().any(|arg| arg == "debug");
     let disk_path = "disk.img";
 
-    println!("Building user application...");
+    println!("Building user applications (sh, help)...");
     let build_user_status = Command::new("cargo")
-    .args(["build", "-p", "user", "--target", "aarch64-unknown-none"])
+    .args([
+        "build",
+        "-p",
+        "user",
+        "--bin",
+        "sh",
+        "--bin",
+        "help",
+        "--target",
+        "aarch64-unknown-none",
+    ])
     .env(
         "CARGO_TARGET_AARCH64_UNKNOWN_NONE_RUSTFLAGS",
         "-C link-arg=-Tcrates/user/user_linker.ld -C link-arg=--gc-sections -C relocation-model=static"
@@ -79,8 +89,8 @@ fn main() {
         "-m",
         "256M",
         "-nographic",
-        "-d",
-        "int",
+//        "-d",
+//       "int",
         "-serial",
         "mon:stdio",
         "-drive",

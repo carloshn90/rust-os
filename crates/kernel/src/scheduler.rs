@@ -1,6 +1,6 @@
 use core::ptr::{addr_of, addr_of_mut, null_mut};
 
-use hal::klog;
+use hal::{kdebug, klog};
 
 use crate::{
     process::{Context, NUMBER_OF_PROCESS, PROC, Process, ProcessState},
@@ -55,7 +55,7 @@ pub fn schedule() -> ! {
                     let old = addr_of_mut!((*cpu).context);
                     let new = addr_of!(p.context);
                     switch(old, new);
-                    logger().log("finishing\n");
+                    kdebug!(logger(), "finishing\n");
                 }
             }
         }
@@ -102,7 +102,7 @@ pub fn my_proc() -> *mut Process {
     unsafe { (*cpu).process }
 }
 
-fn sched() {
+pub fn sched() {
     let cpu = my_cpu();
     let p = my_proc();
 

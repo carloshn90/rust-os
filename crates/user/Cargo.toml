@@ -2,6 +2,16 @@
 name = "user"
 version = "0.1.0"
 edition = "2024"
+autobins = false
 
 [dependencies]
+common = {path = "../common"}
+
+[[bin]]
+name = "sh"
+path = "src/sh.rs"
+
+[[bin]]
+name = "help"
+path = "src/help.rs"
 

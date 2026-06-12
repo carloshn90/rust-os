@@ -1,8 +1,14 @@
 use core::ptr::{read_volatile, write_volatile};
 
+use common::system_call::{SYS_EXEC, SYS_EXIT, SYS_FORK, SYS_READ, SYS_WAIT, SYS_WRITE};
 use hal::klog;
 
-use crate::uart_logger::logger;
+use crate::{
+    exec::k_exec,
+    process::{exit_current, fork_current, user_trap_return, wait_current},
+    scheduler::my_proc,
+    uart_logger::{logger, uart_getc},
+};
 
 const GICD_BASE: *mut u32 = 0x0800_0000 as *mut u32;
 const GICC_BASE: *mut u32 = 0x0801_0000 as *mut u32;
@@ -20,7 +26,7 @@ pub struct IrqState {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn rust_syscall_handler(syscall_id: u64, arg0: u64, arg1: u64) {
+pub extern "C" fn rust_syscall_handler(syscall_id: u64, arg0: u64, arg1: u64, ctx: *mut u64) {
     let l = logger();
 
     match syscall_id {
@@ -28,18 +34,13 @@ pub extern "C" fn rust_syscall_handler(syscall_id: u64, arg0: u64, arg1: u64) {
         99 => {
             l.log("[KERNEL CATCH] Syscall 99 triggered successfully! User code is executing!\n");
         }
-        64 => {
-            l.log("[KERNEL CATCH] Syscall 64 (SYS_WRITE) triggered!\n");
-
+        SYS_WRITE => {
             let str_ptr = arg0 as *const u8;
             let str_len = arg1 as usize;
 
             unsafe {
                 if !str_ptr.is_null() && str_len > 0 {
-                    // Turn the raw user pointer and length into a safe Rust byte slice
                     let byte_slice = core::slice::from_raw_parts(str_ptr, str_len);
-
-                    // Attempt to parse it as valid UTF-8 string data
                     if let Ok(user_str) = core::str::from_utf8(byte_slice) {
                         l.log(user_str);
                     } else {
@@ -48,11 +49,96 @@ pub extern "C" fn rust_syscall_handler(syscall_id: u64, arg0: u64, arg1: u64) {
                 }
             }
         }
+        SYS_READ => {
+            // Block until one character is available on the UART, then return it in x0.
+            let c = uart_getc();
+            unsafe { *ctx = c as u64 };
+        }
+        SYS_EXIT => {
+            klog!(l, "[KERNEL] SYS_EXIT called\n");
+            exit_current();
+        }
+        SYS_FORK => {
+            let user_sp: u64;
+            unsafe {
+                core::arch::asm!("mrs {0}, sp_el0", out(reg) user_sp, options(nomem, nostack, preserves_flags));
+            }
+            match fork_current(ctx as *const u64, user_sp) {
+                Ok(pid) => unsafe { *ctx = pid as u64 },
+                Err(err) => {
+                    klog!(l, "[KERNEL] SYS_FORK failed: {}\n", err);
+                    unsafe { *ctx = u64::MAX };
+                }
+            }
+        }
+        SYS_EXEC => {
+            let name_ptr = arg0 as *const u8;
+            let name_len = arg1 as usize;
+
+            unsafe {
+                if name_ptr.is_null() || name_len == 0 {
+                    *ctx = u64::MAX;
+                    return;
+                }
+
+                let name_bytes = core::slice::from_raw_parts(name_ptr, name_len);
+                let Ok(name) = core::str::from_utf8(name_bytes) else {
+                    *ctx = u64::MAX;
+                    return;
+                };
+
+                let process = my_proc();
+                if process.is_null() {
+                    *ctx = u64::MAX;
+                    return;
+                }
+
+                match k_exec(name, &mut *process) {
+                    Ok(tf) => user_trap_return(tf),
+                    Err(err) => {
+                        klog!(l, "[KERNEL] SYS_EXEC failed for {}: {:?}\n", name, err);
+                        *ctx = u64::MAX;
+                    }
+                }
+            }
+        }
+        SYS_WAIT => match wait_current() {
+            Ok(pid) => unsafe { *ctx = pid as u64 },
+            Err(err) => {
+                klog!(l, "[KERNEL] SYS_WAIT failed: {}\n", err);
+                unsafe { *ctx = u64::MAX };
+            }
+        },
         _ => {
-            // Log unhandled system calls
-            l.log("[KERNEL CATCH] Unknown Syscall ID detected.\n");
+            klog!(l, "[KERNEL CATCH] Unknown Syscall ID {}\n", syscall_id);
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_user_sync_fault(esr: u64, elr: u64, far: u64) {
+    let ec = (esr >> 26) & 0x3F;
+    klog!(
+        logger(),
+        "[KERNEL FAULT] EL0 sync fault: ESR=0x{:X} EC=0x{:X} ELR=0x{:X} FAR=0x{:X}\n",
+        esr,
+        ec,
+        elr,
+        far
+    );
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_kernel_sync_fault(esr: u64, elr: u64, far: u64) {
+    let ec = (esr >> 26) & 0x3F;
+    klog!(
+        logger(),
+        "[KERNEL FAULT] EL1 sync fault: ESR=0x{:X} EC=0x{:X} ELR=0x{:X} FAR=0x{:X}\n",
+        esr,
+        ec,
+        elr,
+        far
+    );
 }
 
 #[unsafe(no_mangle)]
@@ -86,7 +172,7 @@ pub fn push_off() -> IrqState {
     unsafe {
         core::arch::asm!(
             "mrs {0}, daif",
-            "msr daifset, #2", // set I bit: mask IRQs
+            "msr daifset, 2", // set I bit: mask IRQs
             out(reg) daif,
             options(nomem, nostack, preserves_flags),
         );
@@ -101,7 +187,7 @@ pub fn pop_off(state: IrqState) {
     if (state.daif & (1 << 7)) == 0 {
         unsafe {
             core::arch::asm!(
-                "msr daifclr, #2", // clear I bit: unmask IRQs
+                "msr daifclr, 2", // clear I bit: unmask IRQs
                 options(nomem, nostack, preserves_flags),
             );
         }
@@ -143,7 +229,7 @@ pub fn init_irq() {
 
     // Unmask IRQs (clear DAIF.I)
     unsafe {
-        core::arch::asm!("msr daifclr, #2", options(nostack, nomem));
+        core::arch::asm!("msr daifclr, 2", options(nostack, nomem));
     }
 }
 

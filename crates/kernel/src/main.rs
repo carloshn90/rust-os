@@ -6,13 +6,16 @@ mod exec;
 mod irq;
 mod memory;
 mod process;
-pub mod scheduler;
+mod scheduler;
 mod uart_logger;
 mod virtual_memory;
 
 use core::panic::PanicInfo;
 
-use hal::{klog, log::Logger};
+use hal::{
+    klog,
+    log::{LogLevel, Logger},
+};
 
 core::arch::global_asm!(include_str!("boot.S"));
 core::arch::global_asm!(include_str!("mmu.S"));
@@ -24,9 +27,11 @@ use crate::{
     memory::k_me_init,
     process::{proc_init, user_init},
     scheduler::schedule,
-    uart_logger::{UartLogger, init_logging, logger},
+    uart_logger::{UartLogger, init_logging, logger, set_min_log_level},
     virtual_memory::{k_vm_init, k_vm_init_hart},
 };
+
+const KERNEL_LOG_LEVEL: LogLevel = LogLevel::Info;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main() -> ! {
@@ -57,6 +62,7 @@ fn panic(info: &PanicInfo) -> ! {
 
 pub fn k_main() -> ! {
     init_logging();
+    set_min_log_level(KERNEL_LOG_LEVEL);
     logger().log("rustOS: arrch64 QEMU virt boot Ok\n");
     k_me_init();
     k_vm_init().expect("failed to map kernel pages");

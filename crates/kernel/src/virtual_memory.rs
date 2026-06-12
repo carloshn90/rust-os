@@ -3,7 +3,7 @@ use core::{
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use hal::klog;
+use hal::kdebug;
 
 use crate::{
     memory::{PAGE_SIZE, RAM_END, k_alloc, pg_round_up},
@@ -39,6 +39,9 @@ pub const UXN: u64 = 1 << 54;
 const KERNEL_PHYS_BASE: u64 = 0x4008_0000;
 const TRAMPOLINE: u64 = MAX_VA - PAGE_SIZE as u64;
 pub const TRAP_FRAME: u64 = TRAMPOLINE - PAGE_SIZE as u64;
+pub const KSTACK_PAGES: u64 = 2;
+pub const KSTACK_GUARD_PAGES: u64 = 1;
+pub const KSTACK_SIZE: u64 = KSTACK_PAGES * PAGE_SIZE as u64;
 const GICD_BASE: u64 = 0x0800_0000;
 const GICC_BASE: u64 = 0x0801_0000;
 const GICD_SIZE: u64 = 0x10000;
@@ -158,7 +161,8 @@ pub fn k_vm_init_hart() {
 
 #[inline]
 pub fn k_stack(p: usize) -> u64 {
-    TRAMPOLINE - ((p + 1) as u64) * 2 * (PAGE_SIZE as u64)
+    let stride_pages = KSTACK_PAGES + KSTACK_GUARD_PAGES;
+    TRAMPOLINE - ((p + 1) as u64) * stride_pages * (PAGE_SIZE as u64)
 }
 
 pub fn proc_page_table(p: &Process) -> Result<u64, MapError> {
@@ -202,6 +206,65 @@ pub fn proc_page_table(p: &Process) -> Result<u64, MapError> {
         AF | ATTRIDX0 | AP_EL1_RW_EL0_RW,
     )?;
 
+    // EPD1=1 means TCR_EL1 has no TTBR1 kernel address space.  When
+    // user_trap_return switches TTBR0 to this per-process table the kernel
+    // must still reach its own stack, statics and MMIO inside EL1 exception
+    // handlers.  Replicate those mappings here with EL0-no-access so user
+    // code cannot touch them.
+
+    // Kernel data / BSS / free-RAM (contains globals such as LOGGING_INITIALISED).
+    map_pages(
+        page_table,
+        text_end,
+        text_end,
+        (RAM_END as u64) - text_end,
+        AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
+    )?;
+
+    // UART MMIO – needed by every l.log() call inside syscall handlers.
+    map_pages(
+        page_table,
+        UART0_BASE,
+        UART0_BASE,
+        PAGE_SIZE as u64,
+        AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
+    )?;
+
+    // GIC distributor and CPU interface – needed by interrupt handlers.
+    map_pages(
+        page_table,
+        GICD_BASE,
+        GICD_BASE,
+        GICD_SIZE,
+        AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
+    )?;
+    map_pages(
+        page_table,
+        GICC_BASE,
+        GICC_BASE,
+        GICC_SIZE,
+        AF | PXN | UXN | ATTRIDX1 | AP_EL1_RW_EL0_NONE,
+    )?;
+
+    // Kernel stacks: scheduler context-switch may pivot SP to another process
+    // stack before switching TTBR0, so every process page table must include
+    // all kernel stack mappings (EL0 no-access).
+    let kpt = KERNEL_PAGE_TABLE.load(Ordering::SeqCst) as *mut PageTable;
+    for i in 0..NUMBER_OF_PROCESS {
+        let stack_va = k_stack(i);
+        for page in 0..KSTACK_PAGES {
+            let va = stack_va + page * PAGE_SIZE as u64;
+            let stack_phys = kvm_translate(kpt, va)?;
+            map_pages(
+                page_table,
+                va,
+                stack_phys as u64,
+                PAGE_SIZE as u64,
+                AF | PXN | UXN | ATTRIDX0 | AP_EL1_RW_EL0_NONE,
+            )?;
+        }
+    }
+
     Ok(page_table as u64)
 }
 
@@ -230,6 +293,33 @@ pub fn u_vm_alloc(
     }
 
     Ok(page_table as u64)
+}
+
+pub fn clone_user_space(
+    parent_page_table: *mut PageTable,
+    child_page_table: *mut PageTable,
+) -> Result<(), MapError> {
+    // Current user binaries are linked in the low user image window and use
+    // a fixed one-page stack at 0x8000_0000. Copy only EL0-accessible leaves
+    // from those ranges so fork stays fast and bounded.
+    const USER_IMAGE_START: u64 = 0x0010_0000;
+    const USER_IMAGE_END: u64 = 0x0012_0000;
+    const USER_STACK_START: u64 = 0x8000_0000;
+    const USER_STACK_END: u64 = USER_STACK_START + PAGE_SIZE as u64;
+
+    clone_user_pages_in_range(
+        parent_page_table,
+        child_page_table,
+        USER_IMAGE_START,
+        USER_IMAGE_END,
+    )?;
+    clone_user_pages_in_range(
+        parent_page_table,
+        child_page_table,
+        USER_STACK_START,
+        USER_STACK_END,
+    )?;
+    Ok(())
 }
 
 pub fn kvm_translate(page_table: *mut PageTable, va: u64) -> Result<*mut u8, MapError> {
@@ -270,7 +360,7 @@ pub fn map_pages(
         return Err(MapError::UnalignedSize);
     }
 
-    klog!(
+    kdebug!(
         logger(),
         "vm: map va=0x{:X}..0x{:X} pa=0x{:X}..0x{:X} size={}B pages={}\n",
         va,
@@ -288,7 +378,7 @@ pub fn map_pages(
             Some(pte) => {
                 let pte = unsafe { &mut *pte };
                 if (*pte & DESC_VALID) != 0 {
-                    klog!(logger(), "Page already mapped\n",);
+                    kdebug!(logger(), "Page already mapped\n",);
                     return Err(MapError::AlreadyMapped);
                 }
 
@@ -309,20 +399,79 @@ pub fn map_pages(
 
 fn proc_map_stacks(page_table: *mut PageTable) -> Result<(), MapError> {
     for i in 0..NUMBER_OF_PROCESS {
-        let pa = k_alloc();
+        let va = k_stack(i);
+        for page in 0..KSTACK_PAGES {
+            let pa = k_alloc();
+            if pa.is_null() {
+                panic!("kalloc");
+            }
 
-        if pa.is_null() {
-            panic!("kalloc");
+            map_pages(
+                page_table,
+                va + page * PAGE_SIZE as u64,
+                pa as u64,
+                PAGE_SIZE as u64,
+                AF | PXN | UXN | ATTRIDX0 | AP_EL1_RW_EL0_NONE,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn clone_user_pages_in_range(
+    parent_page_table: *mut PageTable,
+    child_page_table: *mut PageTable,
+    start: u64,
+    end: u64,
+) -> Result<(), MapError> {
+    const USER_AP_MASK: u64 = 0b11 << 6;
+    const LEAF_ATTR_MASK: u64 = !0x0000_FFFF_FFFF_F000;
+
+    let mut va = start;
+    while va < end {
+        let Some(parent_pte_ptr) = walk_existing(parent_page_table, va) else {
+            va += PAGE_SIZE as u64;
+            continue;
+        };
+
+        let parent_pte = unsafe { *parent_pte_ptr };
+        if (parent_pte & DESC_VALID) == 0 || (parent_pte & DESC_TABLE) != DESC_PAGE {
+            va += PAGE_SIZE as u64;
+            continue;
         }
 
-        let va = k_stack(i);
+        let access = parent_pte & USER_AP_MASK;
+        if access != AP_EL1_RW_EL0_RW && access != AP_EL1_RX_EL0_RX {
+            va += PAGE_SIZE as u64;
+            continue;
+        }
+
+        if va == TRAMPOLINE || va == TRAP_FRAME {
+            va += PAGE_SIZE as u64;
+            continue;
+        }
+
+        let perm = parent_pte & LEAF_ATTR_MASK & !(DESC_VALID | DESC_PAGE);
+        let parent_pa = pte_to_page_address(parent_pte);
+        let child_mem = k_alloc();
+        if child_mem.is_null() {
+            return Err(MapError::AllocationFailed);
+        }
+        let child_pa = child_mem as *mut u8;
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(parent_pa as *const u8, child_pa, PAGE_SIZE);
+        }
+
         map_pages(
-            page_table,
+            child_page_table,
             va,
-            pa as u64,
+            child_pa as u64,
             PAGE_SIZE as u64,
-            AF | PXN | UXN | ATTRIDX0 | AP_EL1_RW_EL0_NONE,
+            perm,
         )?;
+        va += PAGE_SIZE as u64;
     }
 
     Ok(())
@@ -374,6 +523,27 @@ fn walk(mut page_table: *mut PageTable, va: u64) -> Option<*mut Pte> {
 
             page_table = next as *mut PageTable;
         }
+    }
+
+    let idx = level_index(3, va);
+    let pte = unsafe { &mut (*page_table).entries[idx] };
+    Some(pte as *mut Pte)
+}
+
+fn walk_existing(mut page_table: *mut PageTable, va: u64) -> Option<*mut Pte> {
+    if !is_canonical_addr(va) {
+        return None;
+    }
+
+    for level in 0..3 {
+        let idx = level_index(level, va);
+        let pte = unsafe { &mut (*page_table).entries[idx] };
+
+        if (*pte & DESC_VALID) == 0 || (*pte & DESC_TABLE) == 0 {
+            return None;
+        }
+
+        page_table = pte_to_page_address(*pte) as *mut PageTable;
     }
 
     let idx = level_index(3, va);

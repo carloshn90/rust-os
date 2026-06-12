@@ -44,7 +44,7 @@ pub fn get_elf_header(bytes: &[u8]) -> Option<Elf64Header> {
 }
 
 pub fn get_program_header(bytes: &[u8], offset: usize) -> Option<Elf64Phdr> {
-    if bytes.len() < offset + size_of::<Elf64Header>() {
+    if bytes.len() < offset + size_of::<Elf64Phdr>() {
         return None;
     }
 
