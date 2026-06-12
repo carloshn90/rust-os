@@ -1,4 +1,4 @@
-use common::system_call::{SYS_EXEC, SYS_EXIT, SYS_FORK, SYS_READ, SYS_WAIT, SYS_WRITE};
+use crate::system_call::{SYS_EXEC, SYS_EXIT, SYS_FORK, SYS_READ, SYS_WAIT, SYS_WRITE};
 
 pub fn fprintf(s: &str) {
     sys_write(s);

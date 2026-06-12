@@ -1,4 +1,4 @@
-use hal::{kdebug, klog};
+use hal::kdebug;
 
 use crate::{
     elf::{self, ELF_MAGIC, PT_LOAD},

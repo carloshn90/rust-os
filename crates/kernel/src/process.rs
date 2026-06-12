@@ -183,25 +183,6 @@ pub fn fork_current(saved_ctx: *const u64, user_sp: u64) -> Result<u8, &'static 
     Ok(child.pid)
 }
 
-pub fn spawn_help_child() -> Result<u8, &'static str> {
-    let parent = my_proc();
-    if parent.is_null() {
-        return Err("no current process");
-    }
-
-    let child = alloc_proc();
-    child.parent_pid = Some(unsafe { (*parent).pid });
-
-    k_exec("help", child).map_err(|_| "k_exec help failed")?;
-
-    child.context = Context::default();
-    child.context.sp = (child.k_stack + KSTACK_SIZE) & !0xF;
-    child.context.x[30] = fn_addr(fork_user_return);
-    child.state = ProcessState::RUNNABLE;
-
-    Ok(child.pid)
-}
-
 pub fn wait_current() -> Result<u8, &'static str> {
     let current = my_proc();
     if current.is_null() {

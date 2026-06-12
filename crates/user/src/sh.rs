@@ -3,9 +3,7 @@
 
 use core::panic::PanicInfo;
 
-use crate::print::{fprintf, sys_exec, sys_exit, sys_fork, sys_read_char, sys_wait};
-
-mod print;
+use common::print::{fprintf, sys_exec, sys_exit, sys_fork, sys_read_char, sys_wait};
 
 const MAX_CMD: usize = 64;
 

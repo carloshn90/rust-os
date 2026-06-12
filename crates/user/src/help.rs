@@ -3,9 +3,7 @@
 
 use core::panic::PanicInfo;
 
-use crate::print::{fprintf, sys_exit};
-
-mod print;
+use common::print::{fprintf, sys_exit};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {

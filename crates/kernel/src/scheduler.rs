@@ -23,6 +23,7 @@ pub static mut CPU: Cpu = Cpu {
     intena: 0,
 };
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum WaitChannel {
     DiskFree,
@@ -66,11 +67,6 @@ pub fn schedule() -> ! {
             }
         }
     }
-}
-
-#[inline]
-pub fn chan<T>(x: &T) -> *const () {
-    (x as *const T).cast::<()>()
 }
 
 pub fn sleep(chan: WaitChannel) {
